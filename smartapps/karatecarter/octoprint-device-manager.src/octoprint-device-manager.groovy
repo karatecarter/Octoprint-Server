@@ -1,7 +1,7 @@
 /**
-*  iCamera Connect and Motion Monitor
+*  Octoprint Device Manager
 *
-*  Copyright 2017 Daniel Carter
+*  Copyright 2020 Daniel Carter
 *
 *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
 *  in compliance with the License. You may obtain a copy of the License at:
@@ -14,7 +14,7 @@
 *
 */
  // CHANGE LOG:
- // 03/03/2020 - Initial Release
+ // 03/07/2020 - Initial Release
 
 definition(
     name: "Octoprint Device Manager",
@@ -43,9 +43,9 @@ def configurePrinters() {
     log.debug "Initializing"
     def id = "-new"
     settings."displayName${id}" = null
-  settings."ip${id}" = null
-  settings."port${id}" = null
-  settings."apiKey${id}" = null
+    settings."ip${id}" = null
+    settings."port${id}" = null
+    settings."apiKey${id}" = null
   }
   
   dynamicPage(name: "configurePrinters", title: "Octoprint Servers", install: true, uninstall: true) {
@@ -105,8 +105,8 @@ def printerSettings(params) {
   dynamicPage(name: "printerSettings", title: title, uninstall: false, install: false) {
     if (!deleted) {
     section("Printer Settings") {
-      if (params.isNew) {input "displayName${id}", "text", title:"Name", description: "Leave blank to use Hostname", defaultValue: printer ? printer.displayName : "", required: false
-      input "ip${id}", "text", title:"IP Address/Hostname", description: "Server IP address or hostname", defaultValue: printer ? printer.server : "", required: true
+      if (params.isNew) {input "displayName${id}", "text", title:"Name", description: "Leave blank to use IP", defaultValue: printer ? printer.displayName : "", required: false
+      input "ip${id}", "text", title:"IP Address", description: "Server IP address", defaultValue: printer ? printer.server : "", required: true // not sure why hostname won't work
       input "port${id}", "number", title:"Port", description: "Server Port", defaultValue: printer ? printer.serverport : 80, required: true
       input "apiKey${id}", "text", title:"Server API Key", description: "See Octoprint Settings", required: true
       } else {
@@ -222,7 +222,7 @@ private buildNewPrinter() {
   //log.debug state.switches
   //printer.powerSwitch = settings."powerSwitch${id}".id
   state.initialized = false
-  def dev = [dni: newId, prefs: printer, name: printer.displayName ?: printer.ip]
+  def dev = [dni: newId, prefs: printer, name: printer.displayName ?: printer.server]
 
   return dev
 }
@@ -258,8 +258,10 @@ def initialize() {
     def powerMap = []
     
     printers.each { printer ->
-      subscribe(settings."powerSwitch-${printer.id}", "switch", printerPowerSwitch)
-      powerMap << [printer: printer.id, switch: settings."powerSwitch-${printer.id}".id]
+      if (settings."powerSwitch-${printer.id}") {
+      	subscribe(settings."powerSwitch-${printer.id}", "switch", printerPowerSwitch)
+	    powerMap << [printer: printer.id, switch: settings."powerSwitch-${printer.id}".id]
+      }
     }
     state.powerMap = powerMap
     
