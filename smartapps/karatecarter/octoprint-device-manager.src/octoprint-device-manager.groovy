@@ -336,10 +336,12 @@ def printerSwitch(event)
 {
   if (event.value == "on") {
     log.debug "Switching on"
-    settings."powerSwitch-${event.deviceId}".on()
+    if (settings."powerSwitch-${event.deviceId}") settings."powerSwitch-${event.deviceId}".on()
+    if (settings."extraSwitches-${event.deviceId}") settings."extraSwitches-${event.deviceId}".on()
   } else {
     log.debug "Switching off"
-    settings."powerSwitch-${event.deviceId}".off()
+    if (settings."powerSwitch-${event.deviceId}") settings."powerSwitch-${event.deviceId}".off()
+    if (settings."extraSwitches-${event.deviceId}") settings."extraSwitches-${event.deviceId}".off()
   }
 }
 
