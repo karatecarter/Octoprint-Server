@@ -28,19 +28,25 @@ metadata {
         attribute "remainingTime", "string"
         attribute "autoOff", "boolean"
         attribute "printComplete", "boolean"
+        attribute "currentJobName", "string"
+        attribute "currentJobOrigin", "string"
         
         command "heatPla"
         command "heatAbs"
         command "heatOff"
         command "setBedTemp"
         command "setToolTemp"
-        command "print"
+        command "printSelectedFile"
+        command "printLocalFile"
+        command "printSdFile"
         command "pause"
+        command "resume"
         command "cancel"
         command "dryRunOn"
         command "dryRunOff"
         command "toggleAutoOff"
         command "connect"
+        command "disconnect"
 	}
 
 
@@ -50,10 +56,12 @@ metadata {
 
 	tiles(scale: 2) {
 		standardTile("displayStatus", "device.displayStatus", width: 2, height: 2, canChangeBackground: false) {
-			state("default", label: '${currentValue}%', icon: "st.Office.office19", backgroundColor:"#00a0dc")
-			state("offline", label: "Offline", action: "connect", icon: "st.Office.office19", nextState: "connecting", backgroundColor:"#ff0e05")
-			state("connecting", label: "...", icon: "st.Office.office19", backgroundColor:"#ff0e05")
-            state("unavailable", label: "Unavailable", icon: "st.Office.office19", backgroundColor:"#ffffff")
+			state("default", label: '${currentValue}%', action: "pause", icon: "st.Office.office19", backgroundColor:"#00a0dc")
+			state("paused", label: 'Paused', action: "resume", nextState: "resuming", icon: "st.Office.office19", backgroundColor:"#00a0dc")
+			state("resuming", label: 'Resuming', icon: "st.Office.office19", backgroundColor:"#00a0dc")
+			state("offline", label: "Offline", action: "connect", icon: "st.Office.office19", nextState: "connecting", backgroundColor:"#ffffff")
+			state("connecting", label: "...", icon: "st.Office.office19", backgroundColor:"#ffffff")
+            state("unavailable", label: "Unavailable", icon: "st.Office.office19", backgroundColor:"#ff0e05")
             state("idle", label: "Idle", icon: "st.Office.office19", backgroundColor:"#cccccc")
 		}
         valueTile("printTime", "device.printTime", width: 4, height: 1, inactiveLabel: false, decoration: "flat") {
@@ -134,27 +142,58 @@ def updated () {
 
 // handle commands
 def deviceNotification(String str, String descriptionText) {
-	log.debug descriptionText
-    def deviceName = getLinkText(device);
+	def displayDeviceStatus = true
     
+    log.debug descriptionText
+    def deviceName = getLinkText(device);
+    def printDescription
+    
+    if (device.currentValue('currentJobOrigin') == "sdcard") {
+        printDescription = "SD Card print job "
+    } else {
+        printDescription = "Octoprint Print Job "
+    }
+
+    printDescription = printDescription + "${device.currentValue('currentJobName')} "
+
     if (device.currentValue('status') == "printing" && str == "idle") {
-      log.debug "Sending Print Complete; autoOff=${device.currentValue('autoOff')}"
-      sendEvent(name: "printComplete", value: true, linkText: deviceName, descriptionText: "Print Complete", isStateChange: true, displayed: false)
-      if (device.currentValue('autoOff') == "true")
+      def success = true
+      if (device.currentValue('printProgress') == null) success = false
+      log.debug "Sending Print Complete; progress=${device.currentValue('printProgress')}; success=$success; autoOff=${device.currentValue('autoOff')}"
+        
+      if (success) {
+        printDescription += "completed in ${device.currentValue('printTime')}"
+      } else {
+        printDescription += "failed"
+      }
+      
+      sendEvent(name: "printComplete", value: success, linkText: deviceName, descriptionText: printDescription, isStateChange: true, displayed: true)
+      displayDeviceStatus = false
+      
+      if (success && device.currentValue('autoOff') == "true")
       {
         log.debug "Shutting down in 30 seconds"
         runIn(30, "autoOff")
       }
     }
     
-    sendEvent(name: "status", value: str, descriptionText: descriptionText)
+    if (str == "printing") {
+      if (device.currentValue('status') == "paused") {
+        descriptionText = "Resuming $printDescription"
+      } else {
+        descriptionText = "Starting $printDescription"
+      }
+    }
+    
+    log.debug "Status = $str, descriptionText = $descriptionText"
+    sendEvent(name: "status", value: str, descriptionText: descriptionText, displayed: displayDeviceStatus)
 	if (str != "printing") {
     sendEvent(name: "displayStatus", value: str, linkText: deviceName, displayed: false)
     }
 }
 
 void callbackParse(physicalgraph.device.HubResponse hubResponse) {
-    log.trace "Received response"
+    //log.trace "Received response"
     //log.debug "Response: ${hubResponse}\nDescription: ${hubResponse.description}\nBody: ${hubResponse.body}"
     
     if (hubResponse.description) {
@@ -200,6 +239,51 @@ def setBedTemp(temp)
     runIn(2, refresh)
 }
 
+def pause()
+{
+	def command = getPostCommand("/api/job", "{\"command\": \"pause\", \"action\": \"pause\" }")
+    sendHubCommand(command)
+    runIn(2, refresh)
+}
+
+def resume()
+{
+	def command = getPostCommand("/api/job", "{\"command\": \"pause\", \"action\": \"resume\" }")
+    sendHubCommand(command)
+    runIn(2, refresh)
+}
+
+def printLocalFile(String filePath)
+{
+  printFile("local", filePath)
+}
+
+def printSdFile(String filePath)
+{
+  printFile("sdcard", filePath)
+}
+
+def printFile(String source, String filePath)
+{
+	def command = getPostCommand("/api/files/$source/$filePath", "{\"command\": \"select\", \"print\": true }")
+    sendHubCommand(command)
+    runIn(2, refresh)
+}
+
+def printSelectedFile()
+{
+	def command = getPostCommand("/api/job", "{\"command\": \"start\" }")
+    sendHubCommand(command)
+    runIn(2, refresh)
+}
+
+def cancel()
+{
+	def command = getPostCommand("/api/job", "{\"command\": \"cancel\" }")
+    sendHubCommand(command)
+    runIn(2, refresh)
+}
+
 def connect() {
   //  log.debug "switch = $switch"
 
@@ -210,6 +294,12 @@ def connect() {
     def command = getPostCommand("/api/connection", '{"command":"connect"}')
     sendHubCommand(command)
     sendEvent(name: "displayStatus", value: "connecting", linkText: deviceName, displayed: false)
+	runIn(2, refresh)
+}
+
+def disconnect() {
+    def command = getPostCommand("/api/connection", '{"command":"disconnect"}')
+    sendHubCommand(command)
 	runIn(2, refresh)
 }
 
@@ -248,16 +338,28 @@ private parseResponse(description)
         def descriptionText = "${deviceName} is ${msg.data.state}";
         log.debug descriptionText
         if (msg.data.state == "Printing" || msg.data.state == "Printing from SD") {
-          deviceNotification("printing", descriptionText)
-          descriptionText = "${deviceName} print progress is ${msg.data.progress.completion}";
-          log.debug descriptionText
+          log.debug "${deviceName} print progress is ${msg.data.progress.completion}"
           sendEvent(name: "printProgress", value: msg.data.progress.completion, linkText: deviceName, displayed: false)
           def printTime = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTime, 0 ).time.format( 'HH:mm:ss' )
           def printTimeLeft = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTimeLeft, 0 ).time.format( 'HH:mm:ss' )
           sendEvent(name: "displayStatus", value: msg.data.progress.completion, linkText: deviceName, displayed: false)
+          sendEvent(name: "currentJobName", value: msg.data.job.file.name, linkText: deviceName, displayed: false)
+          sendEvent(name: "currentJobOrigin", value: msg.data.job.file.origin, linkText: deviceName, displayed: false)
           sendEvent(name: "printTime", value: printTime, linkText: deviceName, displayed: false)
           sendEvent(name: "remainingTime", value: printTimeLeft, linkText: deviceName, displayed: false)
-
+          deviceNotification("printing", descriptionText)
+        } else if (msg.data.state == "Pausing" || msg.data.state == "Paused") {
+          log.debug "${deviceName} is ${msg.data.state}; print progress is ${msg.data.progress.completion}"
+          sendEvent(name: "printProgress", value: msg.data.progress.completion, linkText: deviceName, displayed: false)
+          def printTime = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTime, 0 ).time.format( 'HH:mm:ss' )
+          def printTimeLeft = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTimeLeft, 0 ).time.format( 'HH:mm:ss' )
+          sendEvent(name: "displayStatus", value: "paused", linkText: deviceName, displayed: false)
+          sendEvent(name: "currentJobName", value: msg.data.job.file.name, linkText: deviceName, displayed: false)
+          sendEvent(name: "currentJobOrigin", value: msg.data.job.file.origin, linkText: deviceName, displayed: false)
+          sendEvent(name: "printTime", value: printTime, linkText: deviceName, displayed: false)
+          sendEvent(name: "remainingTime", value: printTimeLeft, linkText: deviceName, displayed: false)
+          deviceNotification("paused", descriptionText)
+        
         } else if (msg.data.state.startsWith("Offline")) {
           descriptionText = "${deviceName} is Offline";
           deviceNotification("offline", descriptionText)
@@ -271,14 +373,18 @@ private parseResponse(description)
         } else if (msg.data.state.startsWith("Detecting")) {
           log.debug msg.data.state
           runIn(2, refresh)
+        } else if (msg.data.state.startsWith("Connecting")) {
+          log.debug msg.data.state
+          runIn(2, refresh)
         } else {
-          deviceNotification("idle", descriptionText)
-          descriptionText = "${deviceName} print progress is 0";
-          sendEvent(name: "printProgress", value: 0, linkText: deviceName, displayed: false)
-          def printTime = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTime, 0 ).time.format( 'HH:mm:ss' )
-          def printTimeLeft = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTimeLeft, 0 ).time.format( 'HH:mm:ss' )
+          sendEvent(name: "printProgress", value: msg.data.progress.completion, linkText: deviceName, displayed: false)
+          def printTime = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTime ?: 0, 0 ).time.format( 'HH:mm:ss' )
+          def printTimeLeft = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTimeLeft ?: 0, 0 ).time.format( 'HH:mm:ss' )
+          sendEvent(name: "currentJobName", value: msg.data.job.file.name, linkText: deviceName, displayed: false)
+          sendEvent(name: "currentJobOrigin", value: msg.data.job.file.origin, linkText: deviceName, displayed: false)
           sendEvent(name: "printTime", value: printTime, linkText: deviceName, displayed: false)
           sendEvent(name: "remainingTime", value: printTimeLeft, linkText: deviceName, displayed: false)
+          deviceNotification("idle", descriptionText)
         }
       } else if (msg.data.temperature) {
         sendEvent(name: "hotendTemp", value: msg.data.temperature.tool0.actual, displayed: false)
@@ -290,8 +396,13 @@ private parseResponse(description)
       } else {
         def deviceName = getLinkText(device);
         def descriptionText = "${deviceName} is unavailable";
-        log.debug "Bad response received; marking ${deviceName} as unavailable"
-        deviceNotification("unavailable", descriptionText)
+        if (state.tryCount <= 5) {
+          log.debug "Bad response received; retrying"
+          runIn(2, refresh)
+        } else {
+          log.warn "Too many bad responses; marking ${deviceName} as unavailable"
+          deviceNotification("unavailable", descriptionText)
+        }
       }
     }
 }
