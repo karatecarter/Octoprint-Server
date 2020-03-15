@@ -14,7 +14,8 @@
 *
 */
  // CHANGE LOG:
- // 03/07/2020 - Initial Release
+ // 03/15/2020 - Added logging, removed unnecessary code
+  // 03/07/2020 - Initial Release
 
 definition(
     name: "Octoprint Device Manager",
@@ -38,20 +39,11 @@ preferences {
 private getMaxPrinters() { 5 }
 
 def configurePrinters() {
-  if (!state.initialized)
-  {
-    log.debug "Initializing"
-    def id = "-new"
-    settings."displayName${id}" = null
-    settings."ip${id}" = null
-    settings."port${id}" = null
-    settings."apiKey${id}" = null
-  }
   
   dynamicPage(name: "configurePrinters", title: "Octoprint Servers", install: true, uninstall: true) {
     section("Installed Servers") {
       printers.each { printer ->
-        log.debug "Listing ${printer.displayName} (${printer.server})"
+        log.debug "Listing ${printer.displayName}"
         def hrefParams = [request: "printerSettings", isNew: false, printer: printer]
         href(name: "printer-${printer.id}", params: hrefParams, title: printer.label ?: printer.name, page: "printerSettings", description: "", required: false)
       }
@@ -91,40 +83,42 @@ def printerSettings(params) {
   } else {
     title = "New Printer"
     id = "-new"
-      if (!state.initialized)
-  {
-    log.debug "Initializing"
-    settings."displayName${id}" = null
-  settings."ip${id}" = null
-  settings."port${id}" = null
-  settings."apiKey${id}" = null
-  state.initialized = true
-  }
   }
 
   dynamicPage(name: "printerSettings", title: title, uninstall: false, install: false) {
+    log.trace "Creating printer settings page"
+    log.debug "params.isNew = ${params.isNew}"
+    
     if (!deleted) {
     section("Printer Settings") {
-      if (params.isNew) {input "displayName${id}", "text", title:"Name", description: "Leave blank to use IP", defaultValue: printer ? printer.displayName : "", required: false
+      log.trace "Creating printer settings section"
+      if (params.isNew) {
+      log.trace "Adding settings for new printer"
+      input "displayName${id}", "text", title:"Name", description: "Leave blank to use IP", defaultValue: printer ? printer.displayName : "", required: false
       input "ip${id}", "text", title:"IP Address", description: "Server IP address", defaultValue: printer ? printer.server : "", required: true // not sure why hostname won't work
       input "port${id}", "number", title:"Port", description: "Server Port", defaultValue: printer ? printer.serverport : 80, required: true
       input "apiKey${id}", "text", title:"Server API Key", description: "See Octoprint Settings", required: true
       } else {
       paragraph "Go to device settings to change connection parameters"
       }
+      log.trace "Creating printer power settings"
       if (!params.isNew)
       {
+      log.trace "Printer is not new; adding settings"
       input "powerSwitch${id}", "capability.switch", title: "Power switch", required: false, multiple:false //, submitOnChange: true
       input "extraSwitches${id}", "capability.switch", title: "Extra power switch(es)", description: "Extra devices to power on/off with printer", required: false, multiple:true //, submitOnChange: true
       } else {
+      log.trace "Printer is new; power settings not available"
       paragraph "Save this device configuration then return here to set power switched"
       }
     }
+    log.trace "Printer settings section complete"
     
     if (!params.isNew)
     {
       section("Remove Printer")
       {
+        log.trace "Adding Remove Printer section"
         def hrefParams = [request: "removePrinterPage", confirmed: false, printer: params.printer]
         href(name: "removePrinter", params: hrefParams, title: "Click here to remove this printer", page: "removePrinterPage")
       }
@@ -134,7 +128,9 @@ def printerSettings(params) {
         paragraph "Printer has been deleted"
       }
     }
+  log.trace "End printer settings page"
   }
+  //log.trace "End printer settings page" // putting this line here seems to prevent page from showing
 }
 
 def removePrinterPage(params)
@@ -210,6 +206,8 @@ def confirmedRemovePrinterPage(params)
 }
 
 private buildNewPrinter() {
+  log.trace "Building new printer"
+  
   def printer = [:]
   def id = "-new"
   printer.displayName = settings."displayName${id}"
@@ -221,8 +219,8 @@ private buildNewPrinter() {
   //state.switches << settings."extraSwitches${id}"
   //log.debug state.switches
   //printer.powerSwitch = settings."powerSwitch${id}".id
-  state.initialized = false
   def dev = [dni: newId, prefs: printer, name: printer.displayName ?: printer.server]
+  log.debug "New printer = $dev"
 
   return dev
 }
