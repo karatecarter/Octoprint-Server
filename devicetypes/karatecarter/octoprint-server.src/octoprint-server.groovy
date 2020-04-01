@@ -12,6 +12,11 @@
  *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
  *  for the specific language governing permissions and limitations under the License.
  */
+ // CHANGE LOG:
+ // 03/31/2020 - Format progress with 0 decimal places for display status
+ // 03/07/2020 - Initial Release
+
+
 metadata {
 	definition (name: "Octoprint Server", namespace: "karatecarter", author: "Daniel Carter", cstHandler: true) {
 		capability "Notification"
@@ -125,6 +130,8 @@ metadata {
 		}
 	}
 }
+
+import java.text.DecimalFormat
 
 def installed () {
 	log.debug "Device Handler installed"
@@ -342,7 +349,10 @@ private parseResponse(description)
           sendEvent(name: "printProgress", value: msg.data.progress.completion, linkText: deviceName, displayed: false)
           def printTime = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTime, 0 ).time.format( 'HH:mm:ss' )
           def printTimeLeft = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTimeLeft, 0 ).time.format( 'HH:mm:ss' )
-          sendEvent(name: "displayStatus", value: msg.data.progress.completion, linkText: deviceName, displayed: false)
+          def progressFormat = new DecimalFormat("#")
+          log.debug "Progress = ${msg.data.progress.completion} (${progressFormat.format(msg.data.progress.completion)}%)"
+
+          sendEvent(name: "displayStatus", value: progressFormat.format(msg.data.progress.completion), linkText: deviceName, displayed: false)
           sendEvent(name: "currentJobName", value: msg.data.job.file.name, linkText: deviceName, displayed: false)
           sendEvent(name: "currentJobOrigin", value: msg.data.job.file.origin, linkText: deviceName, displayed: false)
           sendEvent(name: "printTime", value: printTime, linkText: deviceName, displayed: false)
