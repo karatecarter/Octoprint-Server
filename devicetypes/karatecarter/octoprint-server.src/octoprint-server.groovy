@@ -13,7 +13,7 @@
  *  for the specific language governing permissions and limitations under the License.
  */
  // CHANGE LOG:
- // 05/02/2020 - Add settings for autooff delay or temperature threshhold; increase polling while printer is on; fix to only display events in feed if status has changed
+ // 05/02/2020 - Add settings for autooff delay or temperature threshhold; increase polling while printer is on; fix to only display events in feed if status has changed; change port to non-required due to possible bug
  // 03/31/2020 - Format progress with 0 decimal places for display status
  // 03/07/2020 - Initial Release
 
@@ -125,7 +125,7 @@ metadata {
     preferences {
 		section("Device Settings:") {
 			input "server", "string", title:"Hosname or IP Address", description: "Host or IP Address", defaultValue: "192.168.1.187", required: true, displayDuringSetup: true
-			input "serverport", "number", title:"Port", description: "Port", defaultValue: "80", required: true, displayDuringSetup: true
+			input "serverport", "number", title:"Port", description: "Port", defaultValue: "80", required: false, displayDuringSetup: true // removing required due to possible bug where Android app may not recognize 2 chars as a valid value
             input "apikey", "string", title:"API Key", description: "API Key", required: true, displayDuringSetup: true
         }
         section("Auto shutoff:") {
