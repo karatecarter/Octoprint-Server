@@ -13,9 +13,9 @@
  *  for the specific language governing permissions and limitations under the License.
  */
  // CHANGE LOG:
+ // 05/02/2020 - Add settings for autooff delay or temperature threshhold; increase polling while printer is on; fix to only display events in feed if status has changed
  // 03/31/2020 - Format progress with 0 decimal places for display status
  // 03/07/2020 - Initial Release
-
 
 metadata {
 	definition (name: "Octoprint Server", namespace: "karatecarter", author: "Daniel Carter", cstHandler: true) {
@@ -124,10 +124,15 @@ metadata {
     
     preferences {
 		section("Device Settings:") {
-			input "server", "string", title:"Octoprint Server", description: "Host or IP Address", defaultValue: "192.168.1.187", required: true, displayDuringSetup: true
-			input "serverport", "string", title:"Octoprint Server", description: "Port", defaultValue: "80", required: true, displayDuringSetup: true
-            input "apikey", "string", title:"Octoprint Server", description: "API Key", required: true, displayDuringSetup: true
-		}
+			input "server", "string", title:"Hosname or IP Address", description: "Host or IP Address", defaultValue: "192.168.1.187", required: true, displayDuringSetup: true
+			input "serverport", "number", title:"Port", description: "Port", defaultValue: "80", required: true, displayDuringSetup: true
+            input "apikey", "string", title:"API Key", description: "API Key", required: true, displayDuringSetup: true
+        }
+        section("Auto shutoff:") {
+			input name: "autooff_type", type: "enum", title:"Auto off trigger", options: ["Time", "Temperature"], description: "When a print completes, wait for this condition before shutting off power", defaultValue: "Temperature", required: true, displayDuringSetup: true
+			input "autooff_delay", "number", title:"If trigger is set to Time, shutoff this many seconds after a print completes", description: "Seconds", defaultValue: "60", required: true, displayDuringSetup: true
+            input "autooff_temp", "number", title:"If trigger is set to Temp, shutoff after printer hotend cools to this temperature after a print completes", defaultValue: "50", description: "Degrees", required: true, displayDuringSetup: true
+        }
 	}
 }
 
@@ -142,6 +147,7 @@ def updated () {
 	log.debug "Device Handler updated"
     
     state.tryCount = 0
+    state.pending_autooff = false
     
     runEvery1Minute(refresh)
     runIn(2, refresh)
@@ -151,7 +157,7 @@ def updated () {
 def deviceNotification(String str, String descriptionText) {
 	def displayDeviceStatus = true
     
-    log.debug descriptionText
+    //log.debug descriptionText
     def deviceName = getLinkText(device);
     def printDescription
     
@@ -179,8 +185,15 @@ def deviceNotification(String str, String descriptionText) {
       
       if (success && device.currentValue('autoOff') == "true")
       {
-        log.debug "Shutting down in 30 seconds"
-        runIn(30, "autoOff")
+        if (autooff_type == "Time")
+        {
+          log.debug "Shutting down in ${autooff_delay} seconds"
+          runIn(autooff_delay, "autoOff")
+        }
+        else
+        {
+          state.pending_autooff = true
+        }
       }
     }
     
@@ -189,10 +202,15 @@ def deviceNotification(String str, String descriptionText) {
         descriptionText = "Resuming $printDescription"
       } else {
         descriptionText = "Starting $printDescription"
+         state.pending_autooff = false;
       }
     }
     
-    log.debug "Status = $str, descriptionText = $descriptionText"
+    //log.debug "Status = $str, descriptionText = $descriptionText"
+    if (displayDeviceStatus) {
+      if (device.currentValue('status') == str) displayDeviceStatus = false
+    }
+    
     sendEvent(name: "status", value: str, descriptionText: descriptionText, displayed: displayDeviceStatus)
 	if (str != "printing") {
     sendEvent(name: "displayStatus", value: str, linkText: deviceName, displayed: false)
@@ -333,7 +351,7 @@ def toggleAutoOff() {
 private parseResponse(description)
 {
 	def msg = parseLanMessage(description)
-    log.trace "HTTP Response"//: ${msg}"
+    //log.trace "HTTP Response"//: ${msg}"
     
     if (msg.status == 200) {
       state.tryCount = 0
@@ -403,6 +421,21 @@ private parseResponse(description)
         sendEvent(name: "hotendTempSetpoint", value: msg.data.temperature.tool0.target, displayed: false)
         sendEvent(name: "bedTempSetpoint", value: msg.data.temperature.bed.target, displayed: false)
         
+        if (state.pending_autooff && autooff_type == "Temperature")
+        {
+          log.debug "Autooff pending: cuurent temperature=${msg.data.temperature.tool0.actual}; autooff temperature=${autooff_temp}"
+          if (msg.data.temperature.tool0.actual <= autooff_temp)
+          {
+            autoOff()
+          }
+        }
+        
+        if (device.currentValue('status') != "offline") {
+          runIn(15, refresh)
+          log.debug "Refresh in 15 seconds"
+        } else {
+          runEvery1Minute(refresh)
+        }
       } else {
         def deviceName = getLinkText(device);
         def descriptionText = "${deviceName} is unavailable";
@@ -412,6 +445,7 @@ private parseResponse(description)
         } else {
           log.warn "Too many bad responses; marking ${deviceName} as unavailable"
           deviceNotification("unavailable", descriptionText)
+          runEvery1Minute(refresh)
         }
       }
     }
@@ -533,6 +567,7 @@ def setSwitch(boolean switchState)
 
 def autoOff()
 {
+  state.pending_autooff = false
   if (device.currentValue('autoOff') == "true") {
     off()
   } else {
