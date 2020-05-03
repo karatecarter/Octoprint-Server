@@ -14,8 +14,9 @@
 *
 */
  // CHANGE LOG:
+ // 05/02/2020 - Add settings for autooff delay or temperature threshhold; change port to non-required because of a possible issue
  // 03/15/2020 - Added logging, removed unnecessary code
-  // 03/07/2020 - Initial Release
+ // 03/07/2020 - Initial Release
 
 definition(
     name: "Octoprint Device Manager",
@@ -96,7 +97,7 @@ def printerSettings(params) {
       log.trace "Adding settings for new printer"
       input "displayName${id}", "text", title:"Name", description: "Leave blank to use IP", defaultValue: printer ? printer.displayName : "", required: false
       input "ip${id}", "text", title:"IP Address", description: "Server IP address", defaultValue: printer ? printer.server : "", required: true // not sure why hostname won't work
-      input "port${id}", "number", title:"Port", description: "Server Port", defaultValue: printer ? printer.serverport : 80, required: true
+      input "port${id}", "number", title:"Port", description: "Server Port", defaultValue: printer ? printer.serverport : 80, required: false // removing required due to possible bug where Android app may not recognise 2 chars as a valid value
       input "apiKey${id}", "text", title:"Server API Key", description: "See Octoprint Settings", required: true
       } else {
       paragraph "Go to device settings to change connection parameters"
@@ -214,6 +215,9 @@ private buildNewPrinter() {
   printer.server = settings."ip${id}"
   printer.serverport = settings."port${id}"
   printer.apikey = settings."apiKey${id}"
+  printer.autooff_type="Temperature"
+  printer.autooff_delay="60"
+  printer.autooff_temp="50"
   def newId = "${printer.server}:${printer.serverport}"
   //state.switches << settings."powerSwitch${id}"
   //state.switches << settings."extraSwitches${id}"
