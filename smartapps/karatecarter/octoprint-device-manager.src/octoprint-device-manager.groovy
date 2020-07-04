@@ -14,6 +14,9 @@
 *
 */
  // CHANGE LOG:
+ // 07/04/2020 - Add option to send push notification when print is complete
+ //              Add option to bypass print failure check and another option to use autooff when print fails
+ //              Add option for default debug level
  // 05/02/2020 - Add settings for autooff delay or temperature threshhold; change port to non-required because of a possible issue
  // 03/15/2020 - Added logging, removed unnecessary code
  // 03/07/2020 - Initial Release
@@ -218,6 +221,10 @@ private buildNewPrinter() {
   printer.autooff_type="Temperature"
   printer.autooff_delay="60"
   printer.autooff_temp="50"
+  printer.defaultDebugLevel="0"
+  printer.autoOffAfterFailure=false
+  printer.checkForFailure=true
+  printer.sendPushNotifications=true
   def newId = "${printer.server}:${printer.serverport}"
   //state.switches << settings."powerSwitch${id}"
   //state.switches << settings."extraSwitches${id}"
@@ -256,6 +263,7 @@ def initialize() {
     
     subscribe(printers, "status", printerStatusChanged)
     subscribe(printers, "switch", printerSwitch)
+    subscribe(printers, "printComplete", printComplete)
     
     def powerMap = []
     
@@ -333,6 +341,22 @@ def printerStatusChanged(event)
 
     def dev = printers.find { event.deviceId == it.id }
 }
+
+
+def printComplete(event)
+{
+  log.trace "Print complete for ${event.displayName}: $event"
+  
+    def dev = printers.find { event.deviceId == it.id }
+    
+      if (dev.settings.sendPushNotifications == "true")
+      {
+        def desc = event.descriptionText
+        log.debug "Sending push notification: ${desc}"
+        sendPush(desc)
+      }
+}
+
 
 def printerSwitch(event)
 {
