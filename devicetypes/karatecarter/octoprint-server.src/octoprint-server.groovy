@@ -13,15 +13,21 @@
  *  for the specific language governing permissions and limitations under the License.
  */
  // CHANGE LOG:
+ // 07/04/2020 - Add capabilities for use in other apps (Motion Sensor = print active; Temperature Management = hotend temp; Relative Humidity Measurement = print progress)
+ //              Add option to send push notification when print is complete
+ //              Add option to bypass print failure check and another option to use autooff when print fails
+ //              Add tile to set dry run mode (printer runs without heating or extruding)
  // 05/02/2020 - Add settings for autooff delay or temperature threshhold; increase polling while printer is on; fix to only display events in feed if status has changed; change port to non-required due to possible bug
  // 03/31/2020 - Format progress with 0 decimal places for display status
  // 03/07/2020 - Initial Release
 
 metadata {
 	definition (name: "Octoprint Server", namespace: "karatecarter", author: "Daniel Carter", cstHandler: true) {
-		capability "Notification"
-        capability "Refresh"
+		capability "Refresh"
         capability "Switch"
+        capability "Motion Sensor" // printing status
+        capability "Temperature Measurement" // hotend temp
+		capability "Relative Humidity Measurement" // print progress
         
         attribute "displayStatus", "string"
         attribute "printProgress", "number"
@@ -35,6 +41,7 @@ metadata {
         attribute "printComplete", "boolean"
         attribute "currentJobName", "string"
         attribute "currentJobOrigin", "string"
+        attribute "dryRunMode", "boolean"
         
         command "heatPla"
         command "heatAbs"
@@ -118,8 +125,13 @@ metadata {
             state "false", label: "Auto Off", action:"toggleAutoOff", backgroundColor: "#cccccc"
 		}
         
+        standardTile("dryRun", "device.dryRunMode", width: 2, height: 2, decoration: "flat", inactiveLabel: false) {
+			state "true", label: "Dry Run", action:"dryRunOff", backgroundColor: "#00a0dc"
+            state "false", label: "Dry Run", action:"dryRunOn", backgroundColor: "#cccccc"
+		}
+        
 		main "displayStatus"
-		details(["displayStatus", "printTime", "remainingTime", "hotendTemp", "hotendTempSlider", "bedTemp", "bedTempSlider", "heatPla", "heatAbs", "heatOff", "switch", "autoOff", "refresh"])
+		details(["displayStatus", "printTime", "remainingTime", "hotendTemp", "hotendTempSlider", "bedTemp", "bedTempSlider", "heatPla", "heatAbs", "heatOff", "switch", "autoOff", "refresh", "dryRun"])
 	}
     
     preferences {
@@ -129,10 +141,14 @@ metadata {
             input "apikey", "string", title:"API Key", description: "API Key", required: true, displayDuringSetup: true
         }
         section("Auto shutoff:") {
-			input name: "autooff_type", type: "enum", title:"Auto off trigger", options: ["Time", "Temperature"], description: "When a print completes, wait for this condition before shutting off power", defaultValue: "Temperature", required: true, displayDuringSetup: true
+			input "autoOffAfterFailure", "boolean", title: "Auto shutoff when print fails", defaultValue: false, required: true, displayDuringSetup: true
+            input name: "autooff_type", type: "enum", title:"Auto off trigger", options: ["Time", "Temperature"], description: "When a print completes, wait for this condition before shutting off power", defaultValue: "Temperature", required: true, displayDuringSetup: true
 			input "autooff_delay", "number", title:"If trigger is set to Time, shutoff this many seconds after a print completes", description: "Seconds", defaultValue: "60", required: true, displayDuringSetup: true
             input "autooff_temp", "number", title:"If trigger is set to Temp, shutoff after printer hotend cools to this temperature after a print completes", defaultValue: "50", description: "Degrees", required: true, displayDuringSetup: true
         }
+        input "sendPushNotifications", "boolean", title: "Send push notifications when print ends", defaultValue: true, required: true, displayDuringSetup: true
+        input "checkForFailure", "boolean", title: "Check if print failed when complete (some plugins may cause false reporting of failures)", defaultValue: true, required: true, displayDuringSetup: true
+        input "defaultDebugLevel", "number", title:"Printer debug level when dry run is turned off", defaultValue: "0", displayDuringSetup: true
 	}
 }
 
@@ -140,7 +156,9 @@ import java.text.DecimalFormat
 
 def installed () {
 	log.debug "Device Handler installed"
-    updated()
+     state.autoOff = false
+     sendEvent(name: "autoOff", value: false, linkText: deviceName, displayed: false, isStateChange: true,)
+     updated()
 }
 
 def updated () {
@@ -148,7 +166,9 @@ def updated () {
     
     state.tryCount = 0
     state.pending_autooff = false
-    
+    state.dryRunMode = false
+    sendEvent(name: "dryRunMode", value: false, linkText: deviceName, displayed: false, isStateChange: true,)
+        
     runEvery1Minute(refresh)
     runIn(2, refresh)
 }
@@ -171,19 +191,21 @@ def deviceNotification(String str, String descriptionText) {
 
     if (device.currentValue('status') == "printing" && str == "idle") {
       def success = true
-      if (device.currentValue('printProgress') == null) success = false
+      if (checkForFailure == "true" && device.currentValue('printProgress') == null) success = false
       log.debug "Sending Print Complete; progress=${device.currentValue('printProgress')}; success=$success; autoOff=${device.currentValue('autoOff')}"
-        
+      
       if (success) {
         printDescription += "completed in ${device.currentValue('printTime')}"
       } else {
         printDescription += "failed"
       }
       
-      sendEvent(name: "printComplete", value: success, linkText: deviceName, descriptionText: printDescription, isStateChange: true, displayed: true)
+      sendEvent(name: "printComplete", value: success, linkText: deviceName, descriptionText: printDescription, isStateChange: true, displayed: true, data: {sendPush: sendPushNotifications})
+      sendEvent(name: "motion", value: "inactive", displayed: false)
+            
       displayDeviceStatus = false
       
-      if (success && device.currentValue('autoOff') == "true")
+      if ((success || autoOffAfterFailure == "true") && device.currentValue('autoOff') == "true")
       {
         if (autooff_type == "Time")
         {
@@ -192,12 +214,15 @@ def deviceNotification(String str, String descriptionText) {
         }
         else
         {
+          log.debug "Auto shutdown when temperature cools to ${autooff_temp}"
           state.pending_autooff = true
         }
       }
     }
     
     if (str == "printing") {
+      sendEvent(name: "motion", value: "active", displayed: false)
+      
       if (device.currentValue('status') == "paused") {
         descriptionText = "Resuming $printDescription"
       } else {
@@ -317,6 +342,7 @@ def connect() {
       on()
     }
     def command = getPostCommand("/api/connection", '{"command":"connect"}')
+    state.connected = false
     sendHubCommand(command)
     sendEvent(name: "displayStatus", value: "connecting", linkText: deviceName, displayed: false)
 	runIn(2, refresh)
@@ -348,6 +374,46 @@ def toggleAutoOff() {
   }
 }
 
+
+def dryRunOn() {
+  def deviceName = getLinkText(device);
+  
+  log.debug "Enabling dry run"
+  state.dryRunMode = true;
+  sendEvent(name: "dryRunMode", value: true, linkText: deviceName, displayed: false, isStateChange: true,)
+
+  setDryRunMode()
+}
+
+def dryRunOff() {
+  def deviceName = getLinkText(device);
+  
+  log.debug "Disabling dry run"
+  state.dryRunMode = false;
+  sendEvent(name: "dryRunMode", value: false, linkText: deviceName, displayed: false, isStateChange: true,)
+
+  setDryRunMode()
+}
+
+
+def setDryRunMode() {
+  def command
+  
+  if (state.dryRunMode) {
+    log.debug "Setting dry run mode on"
+    command = getPostCommand("/api/printer/command", '{"command":"M111 S8"}')
+  }
+  else {
+    log.debug "Setting dry run mode off"
+    if (defaultDebugLevel == null)
+    {
+      defaultDebugLevel = 0
+    }
+    command = getPostCommand("/api/printer/command", "{\"command\":\"M111 S${defaultDebugLevel}\"}")
+  }
+  sendHubCommand(command)
+}
+
 private parseResponse(description)
 {
 	def msg = parseLanMessage(description)
@@ -365,6 +431,7 @@ private parseResponse(description)
         if (msg.data.state == "Printing" || msg.data.state == "Printing from SD") {
           log.debug "${deviceName} print progress is ${msg.data.progress.completion}"
           sendEvent(name: "printProgress", value: msg.data.progress.completion, linkText: deviceName, displayed: false)
+          sendEvent(name: "humidity", value: msg.data.progress.completion, linkText: deviceName, displayed: false)
           def printTime = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTime, 0 ).time.format( 'HH:mm:ss' )
           def printTimeLeft = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTimeLeft, 0 ).time.format( 'HH:mm:ss' )
           def progressFormat = new DecimalFormat("#")
@@ -379,6 +446,7 @@ private parseResponse(description)
         } else if (msg.data.state == "Pausing" || msg.data.state == "Paused") {
           log.debug "${deviceName} is ${msg.data.state}; print progress is ${msg.data.progress.completion}"
           sendEvent(name: "printProgress", value: msg.data.progress.completion, linkText: deviceName, displayed: false)
+          sendEvent(name: "humidity", value: msg.data.progress.completion, linkText: deviceName, displayed: false)
           def printTime = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTime, 0 ).time.format( 'HH:mm:ss' )
           def printTimeLeft = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTimeLeft, 0 ).time.format( 'HH:mm:ss' )
           sendEvent(name: "displayStatus", value: "paused", linkText: deviceName, displayed: false)
@@ -389,10 +457,12 @@ private parseResponse(description)
           deviceNotification("paused", descriptionText)
         
         } else if (msg.data.state.startsWith("Offline")) {
+          state.connected = false
           descriptionText = "${deviceName} is Offline";
           deviceNotification("offline", descriptionText)
           descriptionText = "${deviceName} print progress is 0";
           sendEvent(name: "printProgress", value: 0, linkText: deviceName, displayed: false)
+          sendEvent(name: "humidity", value: 0, linkText: deviceName, displayed: false)
           
         } else if (msg.data.state.startsWith("Error")) {
           descriptionText = "${deviceName} is Offline";
@@ -403,9 +473,17 @@ private parseResponse(description)
           runIn(2, refresh)
         } else if (msg.data.state.startsWith("Connecting")) {
           log.debug msg.data.state
+          state.connected = false
           runIn(2, refresh)
         } else {
+          if (!state.connected) {
+            setDryRunMode()
+          }
+          state.connected = true
+          
           sendEvent(name: "printProgress", value: msg.data.progress.completion, linkText: deviceName, displayed: false)
+          sendEvent(name: "humidity", value: msg.data.progress.completion, linkText: deviceName, displayed: false)
+
           def printTime = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTime ?: 0, 0 ).time.format( 'HH:mm:ss' )
           def printTimeLeft = new GregorianCalendar( 0, 0, 0, 0, 0, msg.data.progress.printTimeLeft ?: 0, 0 ).time.format( 'HH:mm:ss' )
           sendEvent(name: "currentJobName", value: msg.data.job.file.name, linkText: deviceName, displayed: false)
@@ -416,14 +494,16 @@ private parseResponse(description)
         }
       } else if (msg.data.temperature) {
         sendEvent(name: "hotendTemp", value: msg.data.temperature.tool0.actual, displayed: false)
+      sendEvent(name: "temperature", value: msg.data.temperature.tool0.actual, unit: "C", displayed: false)
         sendEvent(name: "bedTemp", value: msg.data.temperature.bed.actual, displayed: false)
+        // sendEvent(name: "humidity", value: msg.data.temperature.bed.actual, unit: "C", displayed: false)
         
         sendEvent(name: "hotendTempSetpoint", value: msg.data.temperature.tool0.target, displayed: false)
         sendEvent(name: "bedTempSetpoint", value: msg.data.temperature.bed.target, displayed: false)
         
         if (state.pending_autooff && autooff_type == "Temperature")
         {
-          log.debug "Autooff pending: cuurent temperature=${msg.data.temperature.tool0.actual}; autooff temperature=${autooff_temp}"
+          log.debug "Autooff pending: curent temperature=${msg.data.temperature.tool0.actual}; autooff temperature=${autooff_temp}"
           if (msg.data.temperature.tool0.actual <= autooff_temp)
           {
             autoOff()
